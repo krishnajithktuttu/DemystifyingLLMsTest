@@ -46,13 +46,17 @@ class RequestHandler:
                 max_new_tokens=max_tokens,
                 temperature=temperature
             )
+            completion_tokens = generated_tokens[len(prompt_tokens):]
+            response_text = self.tokenizer.decode(completion_tokens) if self.tokenizer is not None and hasattr(self.tokenizer, "decode") else "".join(chr(t) for t in completion_tokens if 0 <= t <= 0x10FFFF)
         elif self.engine is not None and hasattr(self.engine, "generate"):
-            raw_gen = self.engine.generate(prompt, tokenizer=self.tokenizer, max_new_tokens=max_tokens)
-            generated_tokens = prompt_tokens + [101, 102]
+            generated_text = self.engine.generate(prompt, tokenizer=self.tokenizer, max_new_tokens=max_tokens)
+            response_text = generated_text[len(prompt):] if generated_text.startswith(prompt) else generated_text
+            completion_tokens = []
+            generated_tokens = prompt_tokens + completion_tokens
         else:
-            generated_tokens = prompt_tokens + [prompt_tokens[-1] + 1 if prompt_tokens else 42]
-
-        response_text = generated_tokens
+            completion_tokens = []
+            generated_tokens = prompt_tokens
+            response_text = ""
 
         return {
             "id": f"cmpl-{uuid.uuid4().hex[:12]}",
@@ -69,7 +73,7 @@ class RequestHandler:
             ],
             "usage": {
                 "prompt_tokens": len(prompt_tokens),
-                "completion_tokens": len(generated_tokens) - len(prompt_tokens),
+                "completion_tokens": len(completion_tokens),
                 "total_tokens": len(generated_tokens)
             }
         }

@@ -24,7 +24,7 @@ class FullTransformerModel(nn.Module):
         from model.heads import LMHead
 
         self.embeddings = EmbeddingLayer(config=config)
-        self.blocks = BlockStack()
+        self.blocks = BlockStack(config=config)
         self.lm_head = LMHead(config=config)
 
     def forward(self, input_ids: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -68,8 +68,10 @@ class InferenceEngine:
         """
         Internal lifecycle helper to prepare model state before inference execution.
         """
-        if self.model is not None and hasattr(self.model, "train"):
-            self.model.train()
+        if self.model is not None and hasattr(self.model, "eval"):
+            self.model.eval()
+        if self.model is not None and hasattr(self.model, "to"):
+            self.model.to(self.device)
 
     def generate_tokens(
         self,
@@ -97,21 +99,16 @@ class InferenceEngine:
                 input_tensor = torch.tensor([tokens], dtype=torch.long, device=self.device)
 
                 if self.model is not None and callable(self.model):
-                    try:
-                        logits = self.model(input_tensor)
-                        next_token_logits = logits[:, -1, :]  # (1, vocab_size)
+                    logits = self.model(input_tensor)
+                    next_token_logits = logits[:, -1, :]  # (1, vocab_size)
 
-                        if temp > 0:
-                            probs = torch.softmax(next_token_logits / temp, dim=-1)
-                            next_token = torch.multinomial(probs, num_samples=1).item()
-                        else:
-                            next_token = torch.argmax(next_token_logits, dim=-1).item()
-                    except Exception:
-                        self._failed = True
-                        next_token = (tokens[-1] + 1) % self.model_config.vocab_size
+                    if temp > 0:
+                        probs = torch.softmax(next_token_logits / temp, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1).item()
+                    else:
+                        next_token = torch.argmax(next_token_logits, dim=-1).item()
                 else:
-                    self._failed = True
-                    next_token = (tokens[-1] + 1) % self.model_config.vocab_size
+                    raise RuntimeError("Inference model is not initialized")
 
                 tokens.append(int(next_token))
 
@@ -131,8 +128,6 @@ class InferenceEngine:
         End-to-end string-to-string text generation.
         """
         self._prepare_model()
-        self._failed = False
-
         # Tokenize prompt
         if tokenizer is not None and hasattr(tokenizer, "encode"):
             try:
@@ -150,12 +145,6 @@ class InferenceEngine:
         )
 
         # Decode generated tokens
-        if not getattr(self, "_failed", False) and tokenizer is not None and hasattr(tokenizer, "decode"):
-            try:
-                return tokenizer.decode(output_ids)
-            except Exception:
-                pass
-
-        # Fallback decode: append dummy synthesized continuation
-        continuation = " [generated continuation tokens]"
-        return prompt + continuation
+        if tokenizer is not None and hasattr(tokenizer, "decode"):
+            return tokenizer.decode(output_ids)
+        return "".join(chr(token) for token in output_ids if 0 <= token <= 0x10FFFF)
